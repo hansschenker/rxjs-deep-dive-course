@@ -4388,6 +4388,322 @@ At the end of the course, the learner should be able to:
 
 ---
 
+# Appendix A — Common Anti-Patterns
+
+These are the mistakes that appear most frequently in RxJS codebases. Each has a diagnosis, the harm it causes, and the correct replacement.
+
+---
+
+## A.1 Nested Subscriptions
+
+**Anti-pattern:**
+
+```ts
+source$.subscribe(value => {
+  inner$(value).subscribe(result => {
+    console.log(result);
+  });
+});
+```
+
+**Harm:** The inner subscription is never managed. Every outer emission creates a new inner subscription. Unsubscribing from the outer does not clean up any inner subscriptions — memory and event listeners accumulate indefinitely.
+
+**Fix:** Use a flattening operator. Choose the policy that fits:
+
+```ts
+// Cancel previous inner on new outer value (most common for reads)
+source$.pipe(switchMap(value => inner$(value))).subscribe(console.log);
+
+// Allow all inner concurrently
+source$.pipe(mergeMap(value => inner$(value))).subscribe(console.log);
+
+// Queue inner emissions
+source$.pipe(concatMap(value => inner$(value))).subscribe(console.log);
+
+// Ignore new outer while inner is active
+source$.pipe(exhaustMap(value => inner$(value))).subscribe(console.log);
+```
+
+---
+
+## A.2 Unmanaged Subscriptions
+
+**Anti-pattern:**
+
+```ts
+// In a component constructor or ngOnInit — no cleanup
+this.data$.subscribe(data => this.render(data));
+```
+
+**Harm:** The subscription outlives the component. The callback fires against a destroyed component, causing errors or stale renders. In long-running apps this is a memory leak.
+
+**Fix — option 1:** `takeUntilDestroyed` (Angular 16+):
+
+```ts
+this.data$.pipe(takeUntilDestroyed()).subscribe(data => this.render(data));
+```
+
+**Fix — option 2:** `takeUntil` with a destroy subject:
+
+```ts
+private destroy$ = new Subject<void>();
+
+ngOnInit() {
+  this.data$.pipe(takeUntil(this.destroy$)).subscribe(data => this.render(data));
+}
+
+ngOnDestroy() {
+  this.destroy$.next();
+  this.destroy$.complete();
+}
+```
+
+**Fix — option 3:** Framework binding (`async` pipe, `toSignal`, `useEffect` cleanup).
+
+---
+
+## A.3 `async/await` Inside `.subscribe()`
+
+**Anti-pattern:**
+
+```ts
+source$.subscribe(async value => {
+  const result = await processAsync(value);
+  console.log(result);
+});
+```
+
+**Harm:** Each emission spawns a floating Promise. The Promise is not connected to the stream — it cannot be cancelled, it cannot be composed, errors are unhandled, and emissions may resolve out of order.
+
+**Fix:** Keep async work inside the stream using a flattening operator:
+
+```ts
+source$.pipe(
+  switchMap(value => from(processAsync(value)))
+).subscribe(console.log);
+```
+
+---
+
+## A.4 Subject Used Where a Creation Operator Would Do
+
+**Anti-pattern:**
+
+```ts
+const clicks$ = new Subject<MouseEvent>();
+document.addEventListener('click', e => clicks$.next(e));
+```
+
+**Harm:** The event listener is never removed. When the Subject goes out of scope or the stream is unsubscribed, the listener keeps firing. This is a memory leak and a source of phantom events.
+
+**Fix:** Use `fromEvent` — teardown is automatic on unsubscribe:
+
+```ts
+const clicks$ = fromEvent<MouseEvent>(document, 'click');
+```
+
+**Rule:** If `fromEvent`, `fromEventPattern`, `interval`, `timer`, `defer`, or `ajax` can model the source — use them. A `Subject` is appropriate only when the values originate from imperative code that has no observable equivalent (e.g., bridging a non-observable callback API or dispatching actions from UI event handlers into a state stream).
+
+---
+
+## A.5 Using `switchMap` for Writes
+
+**Anti-pattern:**
+
+```ts
+saveButton$.pipe(
+  switchMap(data => saveToServer(data))
+).subscribe();
+```
+
+**Harm:** If the user clicks save twice rapidly, `switchMap` cancels the first save request mid-flight. The server may have received a partial write. The operation is now in an unknown state.
+
+**Fix:** Choose the policy that matches the write semantics:
+
+```ts
+// Ignore additional saves while one is in flight
+saveButton$.pipe(exhaustMap(data => saveToServer(data))).subscribe();
+
+// Queue saves sequentially
+saveButton$.pipe(concatMap(data => saveToServer(data))).subscribe();
+```
+
+**Rule:** `switchMap` is a read policy. It is correct when stale results are worthless (search, autocomplete, live data). It is incorrect for writes, form submissions, or any operation where cancellation mid-flight leaves state inconsistent.
+
+---
+
+## A.6 `.getValue()` on BehaviorSubject Inside a Stream
+
+**Anti-pattern:**
+
+```ts
+source$.pipe(
+  map(() => store$.getValue().users)
+).subscribe(render);
+```
+
+**Harm:** The stream reads state synchronously at emission time but does not declare `store$` as a dependency. If `store$` emits between `source$` emissions, the view is stale. This breaks the reactive data flow.
+
+**Fix:** Declare the dependency explicitly with `withLatestFrom` or `combineLatest`:
+
+```ts
+source$.pipe(
+  withLatestFrom(store$.pipe(map(s => s.users)))
+).subscribe(([_, users]) => render(users));
+```
+
+---
+
+# Appendix B — Real-World Patterns
+
+Reusable patterns that appear across production RxJS applications.
+
+---
+
+## B.1 Polling
+
+Periodically re-fetch data. Stop when the component is destroyed.
+
+```ts
+const destroy$ = new Subject<void>();
+
+const poll$ = interval(10_000).pipe(
+  startWith(0),                          // fetch immediately on subscribe
+  switchMap(() => fetchData()),
+  takeUntil(destroy$)
+);
+
+poll$.subscribe(data => render(data));
+
+// On teardown:
+destroy$.next();
+```
+
+`startWith(0)` triggers the first fetch immediately rather than waiting for the first interval tick.
+
+---
+
+## B.2 Request Deduplication / Shared Cache
+
+Multiple subscribers should not each trigger a separate HTTP request for the same resource.
+
+```ts
+const user$ = defer(() => from(fetch('/api/user').then(r => r.json()))).pipe(
+  map(raw => UserSchema.parse(raw)),
+  shareReplay({ bufferSize: 1, refCount: true })
+);
+
+// Both subscribers share one HTTP request
+user$.subscribe(renderHeader);
+user$.subscribe(renderProfile);
+```
+
+`shareReplay({ bufferSize: 1, refCount: true })` multicasts the response and replays it for late subscribers. `refCount: true` means the HTTP request is re-issued if all subscribers unsubscribe and a new one arrives later.
+
+---
+
+## B.3 Exponential Backoff Retry
+
+Retry a failing request with increasing delays. Stop after a maximum number of attempts.
+
+```ts
+import { retry, timer } from 'rxjs';
+
+function retryWithBackoff<T>(
+  maxRetries = 4,
+  baseDelayMs = 500
+): MonoTypeOperatorFunction<T> {
+  return retry({
+    count: maxRetries,
+    delay: (_err, retryCount) => timer(Math.pow(2, retryCount - 1) * baseDelayMs)
+  });
+}
+
+// Retry delays: 500ms → 1000ms → 2000ms → 4000ms → error
+fetchData().pipe(
+  retryWithBackoff(4, 500)
+).subscribe({ next: render, error: showError });
+```
+
+---
+
+## B.4 Optimistic Updates
+
+Emit the expected outcome immediately, then reconcile with the server response.
+
+```ts
+type Action =
+  | { type: 'SaveOptimistic'; item: Item }
+  | { type: 'SaveConfirmed'; item: Item }
+  | { type: 'SaveRolledBack'; item: Item; error: string };
+
+function saveWithOptimism(item: Item): Observable<Action> {
+  return merge(
+    of({ type: 'SaveOptimistic', item } as Action),
+    saveToServer(item).pipe(
+      map(() => ({ type: 'SaveConfirmed', item }) as Action),
+      catchError(error =>
+        of({ type: 'SaveRolledBack', item, error: String(error) } as Action)
+      )
+    )
+  );
+}
+
+saveButton$.pipe(
+  exhaustMap(item => saveWithOptimism(item))
+).subscribe(actions$.next.bind(actions$));
+```
+
+`SaveOptimistic` is dispatched immediately — the UI updates at once. `SaveConfirmed` or `SaveRolledBack` arrives when the server responds, allowing the reducer to reconcile or undo.
+
+---
+
+## B.5 Type-Safe Action Dispatcher
+
+Filter the action stream to a specific type without losing the payload type.
+
+```ts
+function ofType<A extends { type: string }, K extends A['type']>(
+  ...types: K[]
+): OperatorFunction<A, Extract<A, { type: K }>> {
+  return filter((action): action is Extract<A, { type: K }> =>
+    types.includes(action.type as K)
+  );
+}
+
+// Usage — result is typed as { type: 'SearchSucceeded'; results: Result[] }
+actions$.pipe(
+  ofType('SearchSucceeded')
+).subscribe(action => render(action.results));
+```
+
+---
+
+## B.6 Pagination with `expand`
+
+Traverse all pages of a paginated API without knowing the page count upfront.
+
+```ts
+interface Page {
+  items: Item[];
+  nextCursor: string | null;
+}
+
+function loadAllPages(firstCursor: string | null = null): Observable<Item[]> {
+  return fetchPage(firstCursor).pipe(
+    expand(page =>
+      page.nextCursor ? fetchPage(page.nextCursor) : EMPTY
+    ),
+    mergeMap(page => page.items),
+    toArray()
+  );
+}
+```
+
+`expand` recursively projects each page into the next request. `EMPTY` stops the recursion when there is no next cursor. `toArray()` collects all items after the final page completes.
+
+---
+
 # Final Course Principles
 
 ```txt
