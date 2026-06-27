@@ -3,6 +3,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: 'RxJS Deep Dive',
   description: 'Reactive Architecture, Operator Policies, and State Streams — a 16-module course',
+  base: '/rxjs-deep-dive-course/',
   cleanUrls: true,
 
   themeConfig: {
