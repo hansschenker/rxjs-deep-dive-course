@@ -11,7 +11,7 @@ export default defineConfig({
       { text: 'Home', link: '/' },
       { text: 'Modules', link: '/modules/00-setup' },
       { text: 'Appendices', link: '/appendices/a-anti-patterns' },
-      { text: 'Projects', link: 'https://hansschenker.github.io' }
+      { text: 'Projects', link: 'https://netxpert.ch' }
     ],
 
     sidebar: [
