@@ -10,7 +10,8 @@ export default defineConfig({
     nav: [
       { text: 'Home', link: '/' },
       { text: 'Modules', link: '/modules/00-setup' },
-      { text: 'Appendices', link: '/appendices/a-anti-patterns' }
+      { text: 'Appendices', link: '/appendices/a-anti-patterns' },
+      { text: 'Projects', link: 'https://hansschenker.github.io' }
     ],
 
     sidebar: [
