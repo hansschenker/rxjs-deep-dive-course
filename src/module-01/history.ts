@@ -1,39 +1,103 @@
-// Module 1 — History and Lineage: runnable demo
-
-import { from, interval } from 'rxjs';
-import { take } from 'rxjs/operators';
+// Module 1 — History and Lineage | Companion code for RxJS Deep Dive
 
 /*
- * Historical lineage:
- *   Functional Programming → Haskell → LINQ (Erik Meijer) →
- *   Rx.NET (2010) → ReactiveX → RxJS
+ * COLLECTIONS VS STREAMS
  *
- * The deep idea: collection operators (map, filter, reduce, zip, flatten)
- * apply equally to values already in memory AND to values arriving over time.
+ * Array in memory (space-indexed, pull-based):
  *
- * Iterator (pull): Consumer asks  "give me the next value"
- * Observer  (push): Producer says "here is the next value"
+ *   [10, 20, 30, 40]
+ *
+ * Observable over time (time-indexed, push-based):
+ *
+ *   ---10---20----------30---40---|
+ *
+ * With an array, the consumer asks for the next value (pull).
+ * With an Observable, the producer pushes the next value when it's ready.
  */
 
-// from(Promise) — converts an eager Promise into an Observable
-export const helloAsync$ = from(Promise.resolve('hello'));
-
-// interval + take — asynchronous counter, completes after 3 values
-export const threeTimerTicks$ = interval(1000).pipe(take(3));
+/*
+ * HISTORICAL LINEAGE
+ *
+ *   Functional Programming
+ *           ↓
+ *   Haskell / List Comprehensions
+ *           ↓
+ *   LINQ (Erik Meijer, Microsoft)
+ *           ↓
+ *   Rx.NET (Erik Meijer, 2010)
+ *           ↓
+ *   ReactiveX (cross-language standard)
+ *           ↓
+ *   RxJS
+ *
+ * Erik Meijer recognized that LINQ's query operators — map, filter, reduce, zip —
+ * could be applied not just to values already in memory but to values arriving
+ * over time.  Rx.NET was the first implementation; RxJS brought that model to JS.
+ *
+ * The same transformation operations work across both worlds:
+ *   map · filter · reduce / scan · combine · flatten
+ */
 
 /*
- * async/await vs Observable comparison:
+ * ITERATOR / OBSERVER DUALITY
  *
- * Concern               | async/await         | Observable
- * ----------------------|---------------------|-----------------------------
- * Number of values      | exactly one         | zero, one, many, infinite
- * Eagerness             | eager (starts now)  | lazy (starts on subscribe)
- * Cancellation          | no built-in         | unsubscribe cancels
- * Composition operators | none                | full operator library
- * Time control          | no                  | debounce, throttle, delay
- * Multicast             | no                  | share, shareReplay
+ * Iterator pattern (pull-based — consumer drives):
+ *
+ *   Consumer ---- next() ----> Producer
+ *   Consumer <--- value ------ Producer
+ *
+ * Observer pattern (push-based — producer drives):
+ *
+ *   Producer ---- next(value) ----> Consumer
+ *
+ * An Iterator says:     "Give me the next value."
+ * An Observer receives: "Here is the next value."
+ *
+ * The Observable / Observer pair reverses the direction of control.
+ * The producer decides when to push; the consumer just reacts.
+ */
+
+/*
+ * async/await VS RxJS OBSERVABLE
+ *
+ * Concern               | async/await           | RxJS Observable
+ * ----------------------|-----------------------|-----------------------------
+ * Number of values      | exactly one           | zero, one, many, infinite
+ * Eagerness             | eager (starts now)    | lazy (starts on subscribe)
+ * Cancellation          | no built-in support   | unsubscribe cancels
+ * Composition operators | none                  | full operator library
+ * Time control          | no                    | debounce, throttle, delay
+ * Multicast             | no                    | share, shareReplay
  *
  * They compose:
- *   from(promise)          converts a Promise  → Observable
- *   firstValueFrom(obs$)   converts an Observable → Promise
+ *   from(promise)            converts a Promise      → Observable (one-shot)
+ *   firstValueFrom(source$)  converts an Observable  → Promise   (first value)
+ *
+ * The two models are not in conflict — RxJS wraps where Promises fall short.
  */
+
+import { from, firstValueFrom } from 'rxjs';
+
+// --- 1. from(promise) — converts a Promise into a one-shot Observable ---
+
+function demoFromPromise(): void {
+  // from() wraps the already-started Promise; the Observable emits once then completes.
+  const user$ = from(Promise.resolve({ id: '1', name: 'Alice' }));
+
+  user$.subscribe({
+    next: user => console.log('[from(promise)] user:', user),
+    complete: () => console.log('[from(promise)] complete'),
+  });
+}
+
+// --- 2. firstValueFrom — converts the first Observable emission into a Promise ---
+
+async function demoFirstValueFrom(): Promise<void> {
+  // Awaitable bridge back to imperative / async-await code.
+  const user$ = from(Promise.resolve({ id: '2', name: 'Bob' }));
+  const user = await firstValueFrom(user$);
+  console.log('[firstValueFrom] user:', user);
+}
+
+demoFromPromise();
+demoFirstValueFrom().catch(err => console.error('[firstValueFrom] error:', err));
