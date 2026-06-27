@@ -26,7 +26,7 @@ describe('Module 13 – Marble Tests', () => {
     scheduler.run(({ cold, expectObservable }) => {
       const source$ = cold('a 100ms b 100ms c 300ms |');
       const result$ = source$.pipe(debounceTime(250));
-      expectObservable(result$).toBe('350ms c 50ms |');
+      expectObservable(result$).toBe('452ms c 50ms |');
     });
   });
 
@@ -96,7 +96,7 @@ describe('Module 13 – Marble Tests', () => {
         }, { count: 0 }),
         startWith({ count: 0 }),
       );
-      expectObservable(state$).toBe('x-y-z-w|', {
+      expectObservable(state$).toBe('xy-z-w|', {
         x: { count: 0 },
         y: { count: 1 },
         z: { count: 2 },
